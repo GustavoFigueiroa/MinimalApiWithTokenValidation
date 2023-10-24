@@ -10,5 +10,6 @@ namespace ApiCatalogo2.Models
 
         [JsonIgnore]
         public ICollection<Produto>? Produtos { get; set; }
+
     }
 }

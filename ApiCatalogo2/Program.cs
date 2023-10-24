@@ -1,6 +1,11 @@
 using ApiCatalogo2.Context;
 using ApiCatalogo2.Models;
+using ApiCatalogo2.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using System.Text;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,7 +17,51 @@ var connectionString = builder.Configuration.GetConnectionString("DefautConnecti
 
 builder.Services.AddDbContext<AppDbContext>(options => options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
 
+//Registrando serviço do Token
+builder.Services.AddSingleton<ITokenService>(new TokenService());
+
+//Validando o Token
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+
+        ValidIssuer = builder.Configuration["Jwt:Issuer"],
+        ValidAudience = builder.Configuration["Jwt:Audience"],
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
+    };
+});
+
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
+
+//EndPoint para efetuar o login
+app.MapPost("/login", [AllowAnonymous] (UserModel userModel, ITokenService tokenService) =>
+{
+    if (userModel == null)
+    {
+        return Results.BadRequest("Login inválido");
+    }
+    if (userModel.Username == "gustavo" && userModel.Password == "123")
+    {
+        var tokenString = tokenService.GerarToken(app.Configuration["Jwt:Key"],
+            app.Configuration["Jwt:Issuer"],
+            app.Configuration["Jwt:Audience"],
+            userModel);
+        return Results.Ok(new { token = tokenString });
+    }
+    else
+    {
+        return Results.BadRequest("Login inválido");
+    }
+}).Produces(StatusCodes.Status400BadRequest).Produces(StatusCodes.Status200OK).WithName("Login").WithTags("Autenticacao");
+
+
 //Definir os endpoints(ExcludeFromDescription para ignorar no swagger)
 app.MapGet("/", () => "Catálogo de Produtos - 2022").ExcludeFromDescription();
 
@@ -26,10 +75,10 @@ app.MapPost("/categorias", async (Categoria categoria, AppDbContext db) =>
 });
 
 //Mostra todas categorias
-app.MapGet("/categorias", async (AppDbContext db) => await db.Categorias.ToListAsync());
+app.MapGet("/categorias", async (AppDbContext db) => await db.Categorias.ToListAsync()).RequireAuthorization();
 
 //Mostra uma categorias por ID
-app.MapGet("/categorias{id:int}", async (int id, AppDbContext db) =>
+app.MapGet("/categorias/{id:int}", async (int id, AppDbContext db) =>
 {
     return await db.Categorias.FindAsync(id) is Categoria categoria
         ? Results.Ok(categoria)
@@ -37,7 +86,7 @@ app.MapGet("/categorias{id:int}", async (int id, AppDbContext db) =>
 });
 
 //Atualizar uma categoria
-app.MapPut("/categorias{id:int}", async (int id, Categoria categoria, AppDbContext db) =>
+app.MapPut("/categorias/{id:int}", async (int id, Categoria categoria, AppDbContext db) =>
 {
     if (categoria.CategoriaId != id)
     {
@@ -56,7 +105,7 @@ app.MapPut("/categorias{id:int}", async (int id, Categoria categoria, AppDbConte
 });
 
 //Deletar uma categoria
-app.MapDelete("/categorias{id:int}", async (int id, AppDbContext db) =>
+app.MapDelete("/categorias/{id:int}", async (int id, AppDbContext db) =>
 {
 
     var categoria = await db.Categorias.FindAsync(id);
@@ -83,7 +132,7 @@ app.MapPost("/produtos", async (Produto produto, AppDbContext db) =>
 });
 
 //Mostra todas categorias
-app.MapGet("/produtos", async (AppDbContext db) => await db.Produtos.ToListAsync());
+app.MapGet("/produtos", async (AppDbContext db) => await db.Produtos.ToListAsync()).RequireAuthorization();
 
 //Mostra uma categorias por ID
 app.MapGet("/produtos{id:int}", async (int id, AppDbContext db) =>
@@ -133,13 +182,15 @@ app.MapDelete("/produtos{id:int}", async (int id, AppDbContext db) =>
     return Results.NoContent();
 });
 
-
-
 // Configure the HTTP request pipeline.//Configure
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
+
+//Ativar os serviços de autenticação e autorização 
+app.UseAuthentication();
+app.UseAuthorization();
 
 app.Run();
